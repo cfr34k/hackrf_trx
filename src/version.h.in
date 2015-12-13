@@ -1,0 +1,9 @@
+#ifndef VERSION_H
+#define VERSION_H
+
+#define REVISION "@REVISION@"
+#define VERSION_NUMBER "@VERSION_NUMBER@"
+
+#define VERSION VERSION_NUMBER "-" REVISION
+
+#endif // VERSION_H
