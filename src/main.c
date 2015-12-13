@@ -229,6 +229,7 @@ int setup_mode(hackrf_device **hackrf)
 
 	if(mode == RX || mode == TX) {
 		hackrf_close(*hackrf);
+		*hackrf = NULL;
 	}
 
 	/*
@@ -240,6 +241,7 @@ int setup_mode(hackrf_device **hackrf)
 
 	if(setup_hackrf(hackrf) < 0) {
 		LOG(LVL_ERR, "Cannot set up hackrf.");
+		return -EINVAL;
 	}
 
 	// decide on AUTO mode
@@ -287,7 +289,7 @@ int main(void)
 	int result = 0;
 	int ret = EXIT_FAILURE; // main() return value
 
-	hackrf_device *hackrf;
+	hackrf_device *hackrf = NULL;
 
 	logger_init();
 
@@ -342,7 +344,9 @@ int main(void)
 	ret = EXIT_SUCCESS;
 
 fail:
-	hackrf_close(hackrf);
+	if(hackrf) {
+		hackrf_close(hackrf);
+	}
 
 //fail_hackrf_open:
 	hackrf_exit();
