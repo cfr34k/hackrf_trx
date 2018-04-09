@@ -27,7 +27,7 @@
 
 #define TXVGA_GAIN 0
 
-#define MAX_DC_BYTES_TX (1L<<20)
+#define MAX_DC_BYTES_TX (1L<<16)
 
 enum TRXMode {AUTO, RX, TX};
 
@@ -37,9 +37,11 @@ sem_t sem_mode_switch;
 int running = 1;
 
 #define DC_CHECK_MAX_LOOPS 128
-#define DC_CHECK_BUFFER_LEN 4096
+#define DC_CHECK_TOLERANCE 1
+#define DC_CHECK_BUFFER_LEN (1<<18)
 
-int8_t last_dc_byte = 0;
+int8_t last_dc_byte_i = 0;
+int8_t last_dc_byte_q = 0;
 int8_t dc_check_buffer[DC_CHECK_BUFFER_LEN];
 ssize_t dc_check_buffer_used = 0;
 
@@ -50,46 +52,57 @@ void sighandler(int sig)
 	sem_post(&sem_mode_switch);
 }
 
+int8_t check_for_dc(int8_t *data, size_t len)
+{
+	for(size_t i = 0; i < len; i+=2) {
+		int8_t byte_i = data[i];
+		int8_t byte_q = data[i+1];
+
+		int8_t delta_i = abs(byte_i - last_dc_byte_i);
+		int8_t delta_q = abs(byte_q - last_dc_byte_q);
+
+		if(delta_i > DC_CHECK_TOLERANCE || delta_q > DC_CHECK_TOLERANCE) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
 int rx_callback(hackrf_transfer *transfer)
 {
 	static ssize_t total_written = 0;
 
-	int ret, i;
+	int ret;
+	ssize_t total_size = 0;
 
 	LOG(LVL_DEBUG, "RX callback called - data available: %i bytes.", transfer->valid_length);
 
 	struct pollfd fd = {STDIN_FILENO, POLLIN, 0};
 
 	// TX switch check
-	i = 0;
 	do {
 		ret = poll(&fd, 1, 0);
 		if(ret > 0) {
 			// data available on STDIN -> check for DC
-			ret = read(STDIN_FILENO, dc_check_buffer, DC_CHECK_BUFFER_LEN);
+			dc_check_buffer_used = read(STDIN_FILENO, dc_check_buffer, DC_CHECK_BUFFER_LEN);
 
-			if(ret < 0) {
-				LOG(LVL_ERR, "read(%i, %i) failed: %s", STDIN_FILENO, transfer->valid_length);
+			if(dc_check_buffer_used < 0) {
+				LOG(LVL_ERR, "read(%i, %i) failed: %s", STDIN_FILENO, strerror(errno));
 			} else {
-				dc_check_buffer_used = ret;
-
-				for(ssize_t i = 0; i < dc_check_buffer_used; i++) {
-					int8_t byte = dc_check_buffer[i];
-					if(byte != last_dc_byte) {
-						// not DC -> switch to TX
-						nextMode = TX;
-						sem_post(&sem_mode_switch);
-						break;
-					}
+				total_size += dc_check_buffer_used;
+				if(!check_for_dc(dc_check_buffer, dc_check_buffer_used)) {
+					// not DC -> switch to TX
+					nextMode = TX;
+					sem_post(&sem_mode_switch);
+					return 0;
 				}
 			}
-		} else if(ret < 0) {
+		} else if(dc_check_buffer_used < 0) {
 			LOG(LVL_ERR, "poll() failed for STDIN.");
 			return -1;
 		}
-
-		i++;
-	} while(ret > 0 && i < DC_CHECK_MAX_LOOPS);
+	} while(ret > 0 && total_size < transfer->valid_length);
 
 	// output availability check
 	fd.fd = STDOUT_FILENO;
@@ -128,11 +141,12 @@ int tx_callback(hackrf_transfer *transfer)
 	size_t prefill = (transfer->valid_length < dc_check_buffer_used) ?
 		transfer->valid_length : dc_check_buffer_used;
 
-	ssize_t bytes_to_read = transfer->valid_length - prefill;
+	ssize_t bytes_to_read = transfer->valid_length;
 	ssize_t bytes_read = prefill;
 	ssize_t ret;
 
 	memcpy(transfer->buffer, dc_check_buffer, prefill);
+	dc_check_buffer_used = 0;
 
 	LOG(LVL_DEBUG, "TX callback called - to send: %i bytes.", bytes_to_read);
 
@@ -160,21 +174,33 @@ int tx_callback(hackrf_transfer *transfer)
 		} else { // data available
 			ret = read(STDIN_FILENO, transfer->buffer + bytes_read, bytes_to_read - bytes_read);
 
-			for(ssize_t i = 0; i < ret; i++) {
-				int8_t byte = transfer->buffer[bytes_read + i];
-				if(byte == last_dc_byte) {
+			for(ssize_t i = 0; i < ret; i+=2) {
+				int8_t byte_i = transfer->buffer[bytes_read + i];
+				int8_t byte_q = transfer->buffer[bytes_read + i + 1];
+
+				int8_t delta_i = abs(byte_i - last_dc_byte_i);
+				int8_t delta_q = abs(byte_q - last_dc_byte_q);
+
+				if(delta_i <= DC_CHECK_TOLERANCE && delta_q <= DC_CHECK_TOLERANCE) {
 					dc_transmitted++;
 				} else {
 					dc_transmitted = 0;
-				}
 
-				last_dc_byte = byte;
+					last_dc_byte_i = byte_i;
+					last_dc_byte_q = byte_q;
+				}
 			}
 
 			if(ret < 0) {
 				LOG(LVL_ERR, "read(%i, %i) failed: %s", STDIN_FILENO, transfer->valid_length);
+			} else if(ret == 0) {
+				LOG(LVL_WARN, "Input stream shut down. Terminating");
+				running = 0;
+				sem_post(&sem_mode_switch);
+				break;
 			} else {
 				bytes_read += ret;
+				LOG(LVL_DEBUG, "read %i bytes, %i DC so far", ret, dc_transmitted);
 			}
 		}
 	} while(ret > 0 && bytes_read < bytes_to_read);
