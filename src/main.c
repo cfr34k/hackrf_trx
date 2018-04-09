@@ -19,9 +19,15 @@
 
 #define NFDS 1
 
-#define SAMP_RATE 8000000
+#define SAMP_RATE 2400000
+
+#define CENTER_FREQ 433425000
 
 #define TRANSFER_SIZE 10240
+
+#define TXVGA_GAIN 0
+
+#define MAX_DC_BYTES_TX (1L<<20)
 
 enum TRXMode {AUTO, RX, TX};
 
@@ -30,6 +36,12 @@ sem_t sem_mode_switch;
 
 int running = 1;
 
+#define DC_CHECK_MAX_LOOPS 128
+#define DC_CHECK_BUFFER_LEN 4096
+
+int8_t last_dc_byte = 0;
+int8_t dc_check_buffer[DC_CHECK_BUFFER_LEN];
+ssize_t dc_check_buffer_used = 0;
 
 void sighandler(int sig)
 {
@@ -38,70 +50,46 @@ void sighandler(int sig)
 	sem_post(&sem_mode_switch);
 }
 
-int set_nonblocking(int fd)
-{
-	int flags;
-	if((flags = fcntl(fd, F_GETFL, 0)) == -1) {
-		flags = 0;
-	}
-
-	return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-}
-
-ssize_t transfer_data(int out_fd, int in_fd, size_t len)
-{
-	ssize_t ret = -1;
-	char buf[TRANSFER_SIZE];
-
-	ret = sendfile(out_fd, in_fd, NULL, TRANSFER_SIZE);
-	if(ret >= 0) {
-		return ret;
-	}
-
-	//LOG(LVL_WARN, "sendfile(%i, %i, %i) failed: %s", out_fd, in_fd, len, strerror(errno));
-	//LOG(LVL_WARN, "Falling back to read/write");
-
-	if(len > TRANSFER_SIZE) {
-		len = TRANSFER_SIZE;
-	}
-
-	ret = read(in_fd, buf, len);
-	if(ret < 0) {
-		LOG(LVL_ERR, "read(%i, %i) failed: %s", in_fd, len, strerror(errno));
-		return ret;
-	}
-
-	len = ret;
-
-	ret = write(out_fd, buf, len);
-	if(ret < 0) {
-		LOG(LVL_ERR, "write(%i, %i) failed: %s", out_fd, len, strerror(errno));
-		return ret;
-	}
-
-	return ret;
-}
-
 int rx_callback(hackrf_transfer *transfer)
 {
 	static ssize_t total_written = 0;
 
-	int ret;
+	int ret, i;
 
 	LOG(LVL_DEBUG, "RX callback called - data available: %i bytes.", transfer->valid_length);
 
 	struct pollfd fd = {STDIN_FILENO, POLLIN, 0};
 
 	// TX switch check
-	ret = poll(&fd, 1, 0);
-	if(ret > 0) {
-		// data available on STDIN -> switch to TX
-		nextMode = TX;
-		sem_post(&sem_mode_switch);
-	} else if(ret < 0) {
-		LOG(LVL_ERR, "poll() failed for STDIN.");
-		return -1;
-	}
+	i = 0;
+	do {
+		ret = poll(&fd, 1, 0);
+		if(ret > 0) {
+			// data available on STDIN -> check for DC
+			ret = read(STDIN_FILENO, dc_check_buffer, DC_CHECK_BUFFER_LEN);
+
+			if(ret < 0) {
+				LOG(LVL_ERR, "read(%i, %i) failed: %s", STDIN_FILENO, transfer->valid_length);
+			} else {
+				dc_check_buffer_used = ret;
+
+				for(ssize_t i = 0; i < dc_check_buffer_used; i++) {
+					int8_t byte = dc_check_buffer[i];
+					if(byte != last_dc_byte) {
+						// not DC -> switch to TX
+						nextMode = TX;
+						sem_post(&sem_mode_switch);
+						break;
+					}
+				}
+			}
+		} else if(ret < 0) {
+			LOG(LVL_ERR, "poll() failed for STDIN.");
+			return -1;
+		}
+
+		i++;
+	} while(ret > 0 && i < DC_CHECK_MAX_LOOPS);
 
 	// output availability check
 	fd.fd = STDOUT_FILENO;
@@ -135,9 +123,16 @@ int rx_callback(hackrf_transfer *transfer)
 
 int tx_callback(hackrf_transfer *transfer)
 {
-	ssize_t bytes_to_read = transfer->valid_length;
-	ssize_t bytes_read = 0;
+	static ssize_t dc_transmitted = 0;
+
+	size_t prefill = (transfer->valid_length < dc_check_buffer_used) ?
+		transfer->valid_length : dc_check_buffer_used;
+
+	ssize_t bytes_to_read = transfer->valid_length - prefill;
+	ssize_t bytes_read = prefill;
 	ssize_t ret;
+
+	memcpy(transfer->buffer, dc_check_buffer, prefill);
 
 	LOG(LVL_DEBUG, "TX callback called - to send: %i bytes.", bytes_to_read);
 
@@ -145,12 +140,15 @@ int tx_callback(hackrf_transfer *transfer)
 		struct pollfd fd = {STDIN_FILENO, POLLIN, 0};
 
 		ret = poll(&fd, 1, 10); // wait 10 milliseconds for data
-		if(ret == 0) {
+		if((ret == 0) || (dc_transmitted > MAX_DC_BYTES_TX)) {
 			// no data available, fill remaining buffer with zeros...
 			size_t fillsize = bytes_to_read - bytes_read;
 
 			memset(transfer->buffer + bytes_read, 0, fillsize);
-			LOG(LVL_WARN, "TX underrun: %i bytes filled with zeros.", fillsize);
+			LOG(LVL_WARN, "TX stopping: %i bytes filled with zeros.", fillsize);
+
+			// ... reset DC counter ...
+			dc_transmitted = 0;
 
 			// and switch to RX
 			nextMode = RX;
@@ -159,13 +157,25 @@ int tx_callback(hackrf_transfer *transfer)
 		} else if(ret < 0) {
 			LOG(LVL_ERR, "poll() failed for TX pipe.");
 			break;
-		}
+		} else { // data available
+			ret = read(STDIN_FILENO, transfer->buffer + bytes_read, bytes_to_read - bytes_read);
 
-		ret = read(STDIN_FILENO, transfer->buffer + bytes_read, bytes_to_read - bytes_read);
-		if(ret < 0) {
-			LOG(LVL_ERR, "write(%i, %i) failed: %s", STDIN_FILENO, transfer->valid_length);
-		} else {
-			bytes_read += ret;
+			for(ssize_t i = 0; i < ret; i++) {
+				int8_t byte = transfer->buffer[bytes_read + i];
+				if(byte == last_dc_byte) {
+					dc_transmitted++;
+				} else {
+					dc_transmitted = 0;
+				}
+
+				last_dc_byte = byte;
+			}
+
+			if(ret < 0) {
+				LOG(LVL_ERR, "read(%i, %i) failed: %s", STDIN_FILENO, transfer->valid_length);
+			} else {
+				bytes_read += ret;
+			}
 		}
 	} while(ret > 0 && bytes_read < bytes_to_read);
 
@@ -183,7 +193,7 @@ int setup_hackrf(hackrf_device **hackrf)
 	}
 
 	// set up parameters
-	result = hackrf_set_freq(*hackrf, 100000000);
+	result = hackrf_set_freq(*hackrf, CENTER_FREQ);
 	if(result != HACKRF_SUCCESS) {
 		LOG(LVL_ERR, "hackrf_set_freq() failed: %s (%d)", hackrf_error_name(result), result);
 		goto fail;
@@ -266,6 +276,7 @@ int setup_mode(hackrf_device **hackrf)
 	switch(nextMode) {
 		case TX:
 			LOG(LVL_DEBUG, "Starting TX");
+			hackrf_set_txvga_gain(*hackrf, TXVGA_GAIN);
 			hackrf_start_tx(*hackrf, tx_callback, NULL);
 			break;
 
