@@ -17,17 +17,9 @@
 
 #include "logger.h"
 
+#include "config.h"
+
 #define NFDS 1
-
-#define SAMP_RATE 2400000
-
-#define CENTER_FREQ 433425000
-
-#define TRANSFER_SIZE 10240
-
-#define TXVGA_GAIN 0
-
-#define MAX_DC_BYTES_TX (1L<<16)
 
 enum TRXMode {AUTO, RX, TX};
 
@@ -35,10 +27,6 @@ enum TRXMode mode = AUTO, nextMode = AUTO;
 sem_t sem_mode_switch;
 
 int running = 1;
-
-#define DC_CHECK_MAX_LOOPS 128
-#define DC_CHECK_TOLERANCE 1
-#define DC_CHECK_BUFFER_LEN (1<<18)
 
 int8_t last_dc_byte_i = 0;
 int8_t last_dc_byte_q = 0;
@@ -208,9 +196,10 @@ int tx_callback(hackrf_transfer *transfer)
 	return 0;
 }
 
-int setup_hackrf(hackrf_device **hackrf)
+int setup_hackrf(hackrf_device **hackrf, enum TRXMode trxmode)
 {
 	int result;
+	uint64_t center_freq;
 
 	result = hackrf_open(hackrf);
 	if(result != HACKRF_SUCCESS) {
@@ -219,7 +208,18 @@ int setup_hackrf(hackrf_device **hackrf)
 	}
 
 	// set up parameters
-	result = hackrf_set_freq(*hackrf, CENTER_FREQ);
+	switch(trxmode) {
+		case TX:
+			center_freq = CENTER_FREQ_TX;
+			break;
+
+		case RX:
+		default:
+			center_freq = CENTER_FREQ_RX;
+			break;
+	}
+
+	result = hackrf_set_freq(*hackrf, center_freq);
 	if(result != HACKRF_SUCCESS) {
 		LOG(LVL_ERR, "hackrf_set_freq() failed: %s (%d)", hackrf_error_name(result), result);
 		goto fail;
@@ -275,7 +275,7 @@ int setup_mode(hackrf_device **hackrf)
 
 	mode = AUTO;
 
-	if(setup_hackrf(hackrf) < 0) {
+	if(setup_hackrf(hackrf, nextMode) < 0) {
 		LOG(LVL_ERR, "Cannot set up hackrf.");
 		return -EINVAL;
 	}
