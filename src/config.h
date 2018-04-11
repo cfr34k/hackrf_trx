@@ -9,7 +9,7 @@
 #define CENTER_FREQ_RX (CENTER_FREQ_TX + 100000)
 
 /* Gain settings */
-#define TXVGA_GAIN 47
+#define TXVGA_GAIN 0 //47
 
 /* Number of repeated TX values before a switch to RX occurs */
 #define MAX_DC_BYTES_TX (1L<<16)

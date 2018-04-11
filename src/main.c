@@ -63,6 +63,7 @@ int rx_callback(hackrf_transfer *transfer)
 
 	int ret;
 	ssize_t total_size = 0;
+	ssize_t loops = 0;
 
 	LOG(LVL_DEBUG, "RX callback called - data available: %i bytes.", transfer->valid_length);
 
@@ -70,13 +71,17 @@ int rx_callback(hackrf_transfer *transfer)
 
 	// TX switch check
 	do {
-		ret = poll(&fd, 1, 0);
+		LOG(LVL_DEBUG, "RX Mode: checking if TX should be entered.");
+		ret = poll(&fd, 1, 1);
 		if(ret > 0) {
 			// data available on STDIN -> check for DC
 			dc_check_buffer_used = read(STDIN_FILENO, dc_check_buffer, DC_CHECK_BUFFER_LEN);
 
 			if(dc_check_buffer_used < 0) {
 				LOG(LVL_ERR, "read(%i, %i) failed: %s", STDIN_FILENO, strerror(errno));
+			} else if(dc_check_buffer_used == 0) {
+				LOG(LVL_WARN, "Input stream shut down.");
+				return -1;
 			} else {
 				total_size += dc_check_buffer_used;
 				if(!check_for_dc(dc_check_buffer, dc_check_buffer_used)) {
@@ -90,7 +95,8 @@ int rx_callback(hackrf_transfer *transfer)
 			LOG(LVL_ERR, "poll() failed for STDIN.");
 			return -1;
 		}
-	} while(ret > 0 && total_size < transfer->valid_length);
+		loops++;
+	} while(ret > 0 && total_size < transfer->valid_length && loops < DC_CHECK_MAX_LOOPS);
 
 	// output availability check
 	fd.fd = STDOUT_FILENO;
