@@ -216,12 +216,12 @@ int setup_hackrf(hackrf_device **hackrf, enum TRXMode trxmode)
 	// set up parameters
 	switch(trxmode) {
 		case TX:
-			center_freq = CENTER_FREQ_TX;
+			center_freq = REAL_CENTER_FREQ_TX;
 			break;
 
 		case RX:
 		default:
-			center_freq = CENTER_FREQ_RX;
+			center_freq = REAL_CENTER_FREQ_RX;
 			break;
 	}
 
@@ -309,11 +309,13 @@ int setup_mode(hackrf_device **hackrf)
 		case TX:
 			LOG(LVL_DEBUG, "Starting TX");
 			hackrf_set_txvga_gain(*hackrf, TXVGA_GAIN);
+			hackrf_set_amp_enable(*hackrf, TXPA_ENABLE);
 			hackrf_start_tx(*hackrf, tx_callback, NULL);
 			break;
 
 		case RX:
 			LOG(LVL_DEBUG, "Starting RX");
+			hackrf_set_amp_enable(*hackrf, 0);
 			hackrf_start_rx(*hackrf, rx_callback, NULL);
 			break;
 
