@@ -4,6 +4,7 @@ Makefile
 cmake_install.cmake
 hackrf_trx
 version.h
+config.h
 
 *.bak
 *.sw?
