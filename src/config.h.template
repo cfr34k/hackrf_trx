@@ -35,6 +35,13 @@
 
 #define TXPA_ENABLE 0
 
+#define RXLNA_GAIN 16
+#define RXVGA_GAIN 20
+
+/* Enable or disable antenna power (Bias) during TX or RX: 0 = off, 1 = on */
+#define ANT_POWER_RX 0
+#define ANT_POWER_TX 0
+
 /* Number of repeated TX values before a switch to RX occurs */
 #define MAX_DC_BYTES_TX ((1L<<18) * 14 / 10)
 

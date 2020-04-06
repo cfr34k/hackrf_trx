@@ -274,6 +274,11 @@ int setup_mode(hackrf_device **hackrf)
 
 	int result;
 
+	// disable antenna port power
+	if(*hackrf) {
+		hackrf_set_antenna_enable(*hackrf, 0);
+	}
+
 	// shutdown previous mode
 	switch(mode) {
 		case TX:
@@ -332,12 +337,16 @@ int setup_mode(hackrf_device **hackrf)
 			LOG(LVL_DEBUG, "Starting TX");
 			hackrf_set_txvga_gain(*hackrf, TXVGA_GAIN);
 			hackrf_set_amp_enable(*hackrf, TXPA_ENABLE);
+			hackrf_set_antenna_enable(*hackrf, ANT_POWER_TX);
 			hackrf_start_tx(*hackrf, tx_callback, NULL);
 			break;
 
 		case RX:
 			LOG(LVL_DEBUG, "Starting RX");
 			hackrf_set_amp_enable(*hackrf, 0);
+			hackrf_set_lna_gain(*hackrf, RXLNA_GAIN);
+			hackrf_set_vga_gain(*hackrf, RXVGA_GAIN);
+			hackrf_set_antenna_enable(*hackrf, ANT_POWER_RX);
 			hackrf_start_rx(*hackrf, rx_callback, NULL);
 			break;
 
