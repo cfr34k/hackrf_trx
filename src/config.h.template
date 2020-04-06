@@ -43,16 +43,16 @@
 #define ANT_POWER_TX 0
 
 /* Number of repeated TX values before a switch to RX occurs */
-#define MAX_DC_BYTES_TX ((1L<<18) * 14 / 10)
+#define MAX_DC_BYTES_TX ((1L<<11) * 14 / 10)
 
 /* Max. iterations of DC check loop. This is used to drain the input fifo */
-#define DC_CHECK_MAX_LOOPS 128
+#define DC_CHECK_MAX_LOOPS 2048
 
 /* Tolerance for DC values (keep this small!) */
 #define DC_CHECK_TOLERANCE 1
 
 /* Number of bytes to read during a DC check loop */
-#define DC_CHECK_BUFFER_LEN (1<<18)
+#define DC_CHECK_BUFFER_LEN (1<<12)
 
 #define FREQ_OFFSET_PPM (0)
 
