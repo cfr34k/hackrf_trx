@@ -86,13 +86,13 @@ int rx_callback(hackrf_transfer *transfer)
 	int ret;
 	ssize_t loops = 0;
 
-	LOG(LVL_DEBUG, "RX callback called - data available: %i bytes.", transfer->valid_length);
+	//LOG(LVL_DEBUG, "RX callback called - data available: %i bytes.", transfer->valid_length);
 
 	struct pollfd fd = {STDIN_FILENO, POLLIN, 0};
 
 	// TX switch check
 	do {
-		LOG(LVL_DEBUG, "RX Mode: checking if TX should be entered.");
+		//LOG(LVL_DEBUG, "RX Mode: checking if TX should be entered.");
 		ret = poll(&fd, 1, 1);
 		if(ret > 0) {
 			// data available on STDIN -> check for DC
@@ -137,7 +137,7 @@ int rx_callback(hackrf_transfer *transfer)
 	ret = write(STDOUT_FILENO, transfer->buffer, transfer->valid_length);
 
 	total_written += ret;
-	LOG(LVL_DEBUG, "write() returned %i bytes (total %i).", ret, total_written);
+	//LOG(LVL_DEBUG, "write() returned %i bytes (total %i).", ret, total_written);
 
 	if(ret < 0) {
 		if(errno == EAGAIN) {
@@ -164,7 +164,7 @@ int tx_callback(hackrf_transfer *transfer)
 	memcpy(transfer->buffer, dc_check_buffer, prefill);
 	dc_check_buffer_used = 0;
 
-	LOG(LVL_DEBUG, "TX callback called - to send: %i bytes.", bytes_to_read);
+	//LOG(LVL_DEBUG, "TX callback called - to send: %i bytes.", bytes_to_read);
 
 	do {
 		struct pollfd fd = {STDIN_FILENO, POLLIN, 0};
@@ -216,7 +216,7 @@ int tx_callback(hackrf_transfer *transfer)
 				break;
 			} else {
 				bytes_read += ret;
-				LOG(LVL_DEBUG, "read %i bytes, %i DC so far", ret, dc_transmitted);
+				//LOG(LVL_DEBUG, "read %i bytes, %i DC so far", ret, dc_transmitted);
 			}
 		}
 	} while(ret > 0 && bytes_read < bytes_to_read);
